@@ -5,6 +5,10 @@ import sys
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
+# Never bundle obsolete distribution versions beside the newly built wheels.
+(root / "wheels").mkdir(exist_ok=True)
+for path in (root / "wheels").glob("autostacgis*.whl"):
+    path.unlink()
 for name in ("autostacgis-python", "autostacgis-plugins"):
     source = root.parent / name
     if not (source / "pyproject.toml").exists():

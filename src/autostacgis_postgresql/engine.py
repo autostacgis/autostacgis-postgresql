@@ -1,11 +1,10 @@
 from copy import deepcopy
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
 from autostacgis import Application, Record, Registry
 from autostacgis.config import validate
 from autostacgis.registry import CAPABILITIES
-from autostacgis_plugins import modules
 
 
 def describe(value):
@@ -19,16 +18,18 @@ def describe(value):
 
 
 def plugins():
+    registry = Registry(builtins=True)
     rows = []
-    for module in modules():
-        implementation = module.IMPLEMENTATION
+    for name, capabilities in registry.plugins.items():
+        capability, implementation = next(iter(capabilities.items()))
         contract = deepcopy(getattr(implementation, "contract", {}))
         rows.append(
             {
-                "id": module.ID,
-                "capability": module.CAPABILITY,
-                "requires": list(module.REQUIRES),
-                "defaults": deepcopy(getattr(module, "DEFAULTS", contract.get("settings", {}))),
+                "id": name,
+                "version": registry.versions[name],
+                "capability": capability,
+                "requires": list(registry.requirements[name]),
+                "defaults": deepcopy(registry.defaults[name].get(capability) or contract.get("settings", {})),
                 "settings_schema": deepcopy(
                     getattr(
                         implementation,
@@ -59,6 +60,15 @@ def plugins():
                         "stac-json",
                     )
                 ],
+            },
+            "metadata_structure": {
+                "schemas": [],
+                "inline": {
+                    "properties": {
+                        "properties": {"properties": {"autostacgis:source_item_id": {"type": "string"}}}
+                    }
+                },
+                "strict": True,
             },
             "request": {"sources": ["stac-source"], "goal": {"output": {}}},
         },
@@ -95,7 +105,7 @@ def prepare(configuration, request, inputs, settings, directory=None):
     return app, request, records
 
 
-def persist(records, settings, identifier, validate=None):
+def persist(records, settings, identifier, validate=None, stac=None):
     from autostacgis.data.writers import write_parquet, write_raster
 
     directory = settings.data_dir / "results" / str(identifier)
@@ -108,7 +118,13 @@ def persist(records, settings, identifier, validate=None):
         item["properties"]["autostacgis:source_item_id"] = item["id"]
         item["id"] = str(identifier) + "-" + record.key
         item["collection"] = settings.result_collection
-        item["links"] = []
+        item["links"] = [
+            {
+                "rel": "collection",
+                "href": f"{settings.public_url.rstrip('/')}/collections/{quote(settings.result_collection, safe='')}",
+                "type": "application/json",
+            }
+        ]
         if record.payload is not None:
             stem = uuid4().hex
             if record.kind == "raster":
@@ -134,6 +150,8 @@ def persist(records, settings, identifier, validate=None):
         value = record.clone()
         value.item = item
         published.append(value)
+        if stac is not None:
+            stac.validate(item)
         items.append(item)
     if validate is not None and not validate(published):
         raise ValueError(

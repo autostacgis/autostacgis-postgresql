@@ -42,6 +42,7 @@ def execute_job(identifier, settings=None):
                 result.records,
                 settings,
                 identifier,
+                stac=app.stac,
                 validate=lambda records: (
                     result.solver.validate_outputs(result.plan, records)
                     if result.solver is not None
@@ -76,6 +77,9 @@ def execute_trigger(catalog, base_dir, request):
     from .engine import persist
 
     settings = Settings()
+    import os
+
+    os.environ["AUTOSTACGIS_PLUGIN_DIR"] = str(settings.data_dir / "plugins")
     from autostacgis import Application
 
     # The native trigger supplies an already resolved, trusted catalog snapshot.
@@ -90,6 +94,7 @@ def execute_trigger(catalog, base_dir, request):
             result.records,
             settings,
             identifier,
+            stac=app.stac,
             validate=lambda records: (
                 result.solver.validate_outputs(result.plan, records) if result.solver is not None else True
             ),

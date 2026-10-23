@@ -13,4 +13,5 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173", "app://autostacgis"]
     job_poll_seconds: float = Field(default=1, gt=0)
     result_collection: str = "autostacgis-results"
+    plugin_registry_url: str = "https://autostacgis.github.io/autostacgis-plugins/plugins.json"
     max_inputs: int = Field(default=1000, ge=1)

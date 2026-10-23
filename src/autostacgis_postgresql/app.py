@@ -93,11 +93,41 @@ def create_app(settings=None):
                 return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
         return await call_next(request)
 
+    import os
+
+    os.environ["AUTOSTACGIS_PLUGIN_DIR"] = str(settings.data_dir / "plugins")
+
     router = APIRouter(prefix="/autostacgis", dependencies=[Depends(authorize)])
 
     @router.get("/plugins")
     def plugin_list():
         return engine.plugins()
+
+    def plugin_manager():
+        from autostacgis.plugin_manager import PluginManager
+
+        return PluginManager(settings.data_dir / "plugins", settings.plugin_registry_url)
+
+    @router.get("/plugins/available")
+    def available_plugins():
+        try:
+            return plugin_manager().catalog()
+        except Exception as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+    @router.post("/plugins/install")
+    def install_plugin(value: dict):
+        try:
+            return plugin_manager().install(value["name"], value.get("version"))
+        except Exception as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @router.post("/plugins/install-file")
+    def install_plugin_file(value: dict):
+        try:
+            return plugin_manager().install_file(value["filename"], value["source"])
+        except Exception as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @router.get("/configurations")
     def configurations():

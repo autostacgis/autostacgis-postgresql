@@ -58,3 +58,12 @@ ruff format --check src tests scripts
 Integration tests create collections/items through real STAC transactions, exercise search, configurations, planning, queue claims/cancellation and completed-job publication. They require a migrated disposable database. CI supplies one.
 
 Upstream references: [STAC FastAPI PgSTAC](https://github.com/stac-utils/stac-fastapi-pgstac), [pgSTAC](https://github.com/stac-utils/pgstac/tree/v0.9.9), [STAC API specification](https://github.com/radiantearth/stac-api-spec).
+
+
+## Plugins, metadata contracts and desktop releases
+
+`GET /autostacgis/plugins/available` retrieves the configured online plugin manifest. Authenticated `POST /autostacgis/plugins/install` accepts `{name, version}`; `POST /autostacgis/plugins/install-file` accepts `{filename, source}` for a single Python file. Installs live in `AUTOSTACGIS_DATA_DIR/plugins` in the `autostacgis_plugins` namespace and are available to workers. Set `AUTOSTACGIS_PLUGIN_REGISTRY_URL` for another HTTPS manifest. These are executable Python installations and require trusted plugin code and the backend write token.
+
+Configurations may include `metadata_structure` with `schemas`, `inline`, and `strict`. The engine exposes the resolved declarations to plugin contexts and validates input/output Items. Schema URLs should be HTTPS STAC Item JSON Schemas. The inline schema also describes an entire Item, with custom Item metadata nested under `properties.properties`.
+
+`make build` builds the engine, standard plugins and service wheels. `make release-manifest VERSION=0.2.0` also generates the checksummed `backend-release.json`. Pushing a matching version tag runs `.github/workflows/release.yml` and publishes these assets to GitHub Releases. Electron downloads this feed for independent backend updates; it checks the minimum supported app version and wheel checksums before installation. PostgreSQL/PostGIS binary upgrades remain coupled to the desktop runtime manifest. The backend remains independently deployable without Electron.

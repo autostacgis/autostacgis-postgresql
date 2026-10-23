@@ -1,0 +1,31 @@
+name: service
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:17-3.5
+        env: {POSTGRES_USER: autostacgis, POSTGRES_PASSWORD: test-password, POSTGRES_DB: autostacgis}
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U autostacgis" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      AUTOSTACGIS_DATABASE_URL: postgresql://autostacgis:test-password@127.0.0.1:5432/autostacgis
+      AUTOSTACGIS_TEST_DSN: postgresql://autostacgis:test-password@127.0.0.1:5432/autostacgis
+    steps:
+      - uses: actions/checkout@v4
+        with: {path: autostacgis-postgresql}
+      - uses: actions/checkout@v4
+        with: {repository: autostacgis/autostacgis-python, path: autostacgis-python}
+      - uses: actions/checkout@v4
+        with: {repository: autostacgis/autostacgis-plugins, path: autostacgis-plugins}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -e autostacgis-python -e 'autostacgis-plugins[triggers]' -e 'autostacgis-postgresql[dev]'
+      - run: autostacgis-server migrate
+      - run: pytest autostacgis-postgresql/tests
+      - run: ruff check autostacgis-postgresql/src autostacgis-postgresql/tests autostacgis-postgresql/scripts
+      - run: ruff format --check autostacgis-postgresql/src autostacgis-postgresql/tests autostacgis-postgresql/scripts
+      - run: python -m build autostacgis-postgresql

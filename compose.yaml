@@ -1,0 +1,55 @@
+name: autostacgis
+x-api: &api
+  build: .
+  image: autostacgis-postgresql:local
+  environment: &environment
+    AUTOSTACGIS_DATABASE_URL: postgresql://autostacgis:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/autostacgis
+    AUTOSTACGIS_API_TOKEN: ${AUTOSTACGIS_API_TOKEN:?Set AUTOSTACGIS_API_TOKEN}
+    AUTOSTACGIS_DATA_DIR: /data
+    AUTOSTACGIS_PUBLIC_URL: ${AUTOSTACGIS_PUBLIC_URL:-http://127.0.0.1:8080}
+    AUTOSTACGIS_CORS_ORIGINS: ${AUTOSTACGIS_CORS_ORIGINS:-["http://localhost:5173","http://127.0.0.1:5173","app://autostacgis"]}
+  volumes:
+    - results:/data
+    - type: bind
+      source: ${AUTOSTACGIS_INPUT_DIRECTORY:-./incoming}
+      target: /data/incoming
+      read_only: true
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    platform: linux/amd64
+    environment:
+      POSTGRES_USER: autostacgis
+      POSTGRES_DB: autostacgis
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autostacgis -d autostacgis"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  migrate:
+    <<: *api
+    command: ["autostacgis-server", "migrate"]
+    depends_on:
+      db: {condition: service_healthy}
+  api:
+    <<: *api
+    ports:
+      - "127.0.0.1:${AUTOSTACGIS_PORT:-8080}:8080"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/_mgmt/ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  worker:
+    <<: *api
+    command: ["autostacgis-server", "worker"]
+    depends_on:
+      api: {condition: service_healthy}
+volumes:
+  postgres:
+  results:

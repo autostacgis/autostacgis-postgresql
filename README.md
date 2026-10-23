@@ -1,1 +1,46 @@
-# autostacgis-postgresql
+# AutoSTACGIS PostgreSQL
+
+Independent STAC API backed by PostgreSQL, PostGIS, pgSTAC 0.9.9, STAC FastAPI PgSTAC 7.1.0 and TiTiler 1.2.1. The published compatible releases are pinned together. Standard collections, items, GET/POST search, CQL2, sorting, fields, queryables and transactions come from STAC FastAPI rather than a custom STAC implementation.
+
+## Start
+
+Check out `autostacgis-python` and `autostacgis-plugins` beside this repository, then:
+
+```sh
+python -m pip install build
+python scripts/build_engine_wheels.py
+cp .env.example .env
+# Set unique POSTGRES_PASSWORD and AUTOSTACGIS_API_TOKEN in .env.
+mkdir -p incoming
+docker compose up --build -d
+```
+
+The API is at `http://127.0.0.1:8080`, OpenAPI at `/api.html`, search at `/search`, and COG metadata/tiles at `/cog`. The COG proxy accepts HTTP(S) assets and serves previews through this backend rather than sending private catalog URLs to a public tiler. Compose starts PostgreSQL, performs a one-shot migration, then starts the API and a durable job worker. The database is not published to the host. Volumes retain catalog, configurations, jobs and output assets. Use `docker compose down` to stop; adding `-v` deliberately removes persistent data. For an existing PostgreSQL/PostGIS installation, install the wheels and this package, set `AUTOSTACGIS_DATABASE_URL`, then run `autostacgis-server migrate`, `autostacgis-server serve`, and `autostacgis-server worker` separately.
+
+The desktop application bundles this service's source and engine wheels. It downloads container images and builds/starts the service only after the user chooses Download/Start. It can connect to an independently deployed instance or any standard STAC API instead.
+
+## API
+
+Standard STAC reads and search are public. All catalog mutations and `/autostacgis/*` endpoints require `Authorization: Bearer <AUTOSTACGIS_API_TOKEN>`; an empty server token disables those endpoints. Use HTTPS and scoped credentials at your reverse proxy for a shared deployment. CORS origins are an explicit JSON array in `AUTOSTACGIS_CORS_ORIGINS`.
+
+- `GET /autostacgis/plugins`: every installed plugin grouped by capability, raw defaults, settings JSON Schema, dependencies and processing/solver contracts. Unknown upstream plugin parameters remain editable as JSON.
+- `GET /autostacgis/configurations`, `PUT /autostacgis/configurations/{name}`: validated shared configuration documents.
+- `POST /autostacgis/validate`, `POST /autostacgis/plan`: `{configuration, request?, inputs?, trigger?}`. `inputs` is an optional array of selected STAC Items; omission discovers through configured metadata providers.
+- `POST /autostacgis/jobs`: queue the same invocation; returns a durable UUID. `GET /autostacgis/jobs` and `GET /autostacgis/jobs/{id}` report state/results. `DELETE` cancels queued/running jobs; the supervising worker terminates the workflow process group.
+- A job with `trigger: "apscheduler"` or `trigger: "watchdog"` starts that enabled trigger using its raw plugin settings. Trigger jobs discover inputs on each invocation, publish each run back into the STAC catalog, and retain their most recent result. Cancel stops the managed trigger and its processing descendants. They consume one worker each; run additional workers for concurrent workflows.
+- Published product IDs are namespaced by job; original IDs are retained in `properties.autostacgis:source_item_id`. Final goal validation runs again after publication, and a conflicting identity/collection/URL constraint fails rather than reporting an unsatisfied goal as successful. Completed outputs are durably encoded as COG or Parquet, ingested into `autostacgis-results`, and served under `/assets/{job}/{file}` for both clients. Execution runs separately from HTTP requests. The PostgreSQL queue uses `FOR UPDATE SKIP LOCKED`; add workers to consume independent jobs. A crashed supervisor leaves its running rows visible for explicit cancellation/retry; workflows with side effects are not silently replayed.
+
+API catalogs accept only compact references to installed plugin names, not arbitrary Python module imports. This API grants trusted users the ability to run configured processing and access mounted data; it is not a multi-tenant execution sandbox. The configured `AUTOSTACGIS_INPUT_DIRECTORY` is mounted read-only at `/data/incoming`; the desktop app provides an input-folder chooser. Use those backend paths for file providers and watchers. On Docker Desktop, `backend: polling` can be used when native file events are not propagated through a shared folder. Source files/models must be available to the worker at the configured locations. Standard STAC endpoints remain usable when AutoSTACGIS extensions are absent from a remote API.
+
+## Development and validation
+
+```sh
+pip install -e ../autostacgis-python -e '../autostacgis-plugins[triggers]' -e '.[dev]'
+AUTOSTACGIS_TEST_DSN=postgresql://... pytest
+ruff check src tests scripts
+ruff format --check src tests scripts
+```
+
+Integration tests create collections/items through real STAC transactions, exercise search, configurations, planning, queue claims/cancellation and completed-job publication. They require a migrated disposable database. CI supplies one.
+
+Upstream references: [STAC FastAPI PgSTAC](https://github.com/stac-utils/stac-fastapi-pgstac), [pgSTAC](https://github.com/stac-utils/pgstac/tree/v0.9.9), [STAC API specification](https://github.com/radiantearth/stac-api-spec).

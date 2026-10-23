@@ -29,3 +29,21 @@ jobs:
       - run: ruff check autostacgis-postgresql/src autostacgis-postgresql/tests autostacgis-postgresql/scripts
       - run: ruff format --check autostacgis-postgresql/src autostacgis-postgresql/tests autostacgis-postgresql/scripts
       - run: python -m build autostacgis-postgresql
+      - run: python autostacgis-postgresql/scripts/build_engine_wheels.py
+      - name: Build and start the independent container service
+        working-directory: autostacgis-postgresql
+        run: |
+          mkdir -p incoming
+          docker compose up --build --detach --wait
+          curl --fail http://127.0.0.1:8080/conformance
+          curl --fail -H "Authorization: Bearer ci-api-token" http://127.0.0.1:8080/autostacgis/plugins > /dev/null
+        env:
+          POSTGRES_PASSWORD: ci-container-password
+          AUTOSTACGIS_API_TOKEN: ci-api-token
+      - name: Stop the test service
+        if: always()
+        working-directory: autostacgis-postgresql
+        run: docker compose down --volumes
+        env:
+          POSTGRES_PASSWORD: ci-container-password
+          AUTOSTACGIS_API_TOKEN: ci-api-token

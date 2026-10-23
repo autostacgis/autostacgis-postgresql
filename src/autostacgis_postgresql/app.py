@@ -60,8 +60,8 @@ def create_app(settings=None):
             await close_db_connection(app)
 
     stac_settings = StacSettings(
-        stac_fastapi_title="AutoSTACGIS STAC API",
-        stac_fastapi_description="pgSTAC catalog and AutoSTACGIS workflows",
+        stac_fastapi_title="AutostacGIS STAC API",
+        stac_fastapi_description="pgSTAC catalog and AutostacGIS workflows",
         stac_fastapi_landing_id="autostacgis",
         stac_fastapi_version="1.0.0",
         enable_transactions_extensions=True,
@@ -81,7 +81,7 @@ def create_app(settings=None):
         supplied = request.headers.get("authorization", "")
         if not token or not compare_digest(supplied, "Bearer " + token):
             raise HTTPException(
-                401, "A configured AutoSTACGIS API token is required", headers={"WWW-Authenticate": "Bearer"}
+                401, "A configured AutostacGIS API token is required", headers={"WWW-Authenticate": "Bearer"}
             )
 
     @app.middleware("http")

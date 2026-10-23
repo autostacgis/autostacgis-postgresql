@@ -55,7 +55,7 @@ def execute_job(identifier, settings=None):
             "type": "Collection",
             "stac_version": "1.1.0",
             "id": settings.result_collection,
-            "description": "AutoSTACGIS workflow outputs",
+            "description": "AutostacGIS workflow outputs",
             "license": "proprietary",
             "links": [],
             "extent": {"spatial": {"bbox": [[-180, -90, 180, 90]]}, "temporal": {"interval": [[None, None]]}},
@@ -98,7 +98,7 @@ def execute_trigger(catalog, base_dir, request):
             "type": "Collection",
             "stac_version": "1.1.0",
             "id": settings.result_collection,
-            "description": "AutoSTACGIS workflow outputs",
+            "description": "AutostacGIS workflow outputs",
             "license": "proprietary",
             "links": [],
             "extent": {"spatial": {"bbox": [[-180, -90, 180, 90]]}, "temporal": {"interval": [[None, None]]}},
@@ -174,6 +174,17 @@ def run(settings=None):
     settings = settings or Settings()
     store = Store(settings)
     store.initialize()
+    if os.environ.get("AUTOSTACGIS_MANAGED") == "1":
+        from _thread import interrupt_main
+        from threading import Thread
+
+        def stop_input():
+            for line in sys.stdin:
+                if line.strip() == "stop":
+                    break
+            interrupt_main()
+
+        Thread(target=stop_input, daemon=True).start()
     try:
         while True:
             job = store.claim()

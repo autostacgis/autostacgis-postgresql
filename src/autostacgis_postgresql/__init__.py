@@ -1,1 +1,1 @@
-"""pgSTAC-backed catalog and native AutoSTACGIS orchestration."""
+"""pgSTAC-backed catalog and native AutostacGIS orchestration."""

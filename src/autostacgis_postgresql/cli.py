@@ -4,7 +4,7 @@ from .config import Settings
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Independent AutoSTACGIS PostgreSQL service")
+    parser = argparse.ArgumentParser(description="Independent AutostacGIS PostgreSQL service")
     parser.add_argument("command", choices=["serve", "worker", "migrate", "execute"])
     parser.add_argument("job_id", nargs="?")
     parser.add_argument("--host", default="127.0.0.1")

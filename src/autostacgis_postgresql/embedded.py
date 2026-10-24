@@ -54,6 +54,55 @@ def exclusive_cluster(directory):
                 msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
 
 
+class WindowsPostgresProcess:
+    """Monitor the actual server launched by pg_ctl, without relying on PID reuse."""
+
+    def __init__(self, pid):
+        import ctypes
+        from ctypes import wintypes
+
+        self.pid = pid
+        self.ctypes = ctypes
+        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        self.kernel.OpenProcess.restype = wintypes.HANDLE
+        self.kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        self.kernel.GetExitCodeProcess.restype = wintypes.BOOL
+        self.kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        self.kernel.TerminateProcess.restype = wintypes.BOOL
+        self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        self.kernel.CloseHandle.restype = wintypes.BOOL
+        # Query and terminate only this owned server; keep a handle to its identity.
+        self.handle = self.kernel.OpenProcess(0x1000 | 0x0001, False, pid)
+        if not self.handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def poll(self):
+        from ctypes import wintypes
+
+        code = wintypes.DWORD()
+        if not self.kernel.GetExitCodeProcess(self.handle, self.ctypes.byref(code)):
+            raise self.ctypes.WinError(self.ctypes.get_last_error())
+        return None if code.value == 259 else code.value  # STILL_ACTIVE
+
+    def wait(self, timeout=None):
+        deadline = None if timeout is None else monotonic() + timeout
+        while (code := self.poll()) is None:
+            if deadline is not None and monotonic() >= deadline:
+                raise subprocess.TimeoutExpired("postgres", timeout)
+            sleep(0.05)
+        return code
+
+    def kill(self):
+        if not self.kernel.TerminateProcess(self.handle, 1) and self.poll() is None:
+            raise self.ctypes.WinError(self.ctypes.get_last_error())
+
+    def close(self):
+        if self.handle:
+            self.kernel.CloseHandle(self.handle)
+            self.handle = None
+
+
 class EmbeddedBackend:
     def __init__(self, postgres_root, directory, password, token, api_port=0):
         self.root = Path(postgres_root).resolve()
@@ -69,6 +118,7 @@ class EmbeddedBackend:
             self.port = free_port()
         self.children = []
         self.logs = []
+        self.process_handles = []
         self.url = f"http://127.0.0.1:{self.api_port}"
         self.dsn = f"postgresql://autostacgis:{quote(password, safe='')}@127.0.0.1:{self.port}/autostacgis"
         self.stopped = Event()
@@ -106,6 +156,63 @@ class EmbeddedBackend:
                 detail = detail.replace(secret, "[redacted]").replace(quote(secret, safe=""), "[redacted]")
         return RuntimeError(f"{message}; see {name}.log" + (f"\n{detail}" if detail else ""))
 
+    def start_postgres(self):
+        options = [
+            "-h",
+            "127.0.0.1",
+            "-p",
+            str(self.port),
+            "-c",
+            "unix_socket_directories=",
+            "-c",
+            "max_connections=40",
+        ]
+        if os.name != "nt":
+            return self.start_child([self.binary("postgres"), "-D", str(self.cluster), *options], "postgres")
+        # pg_ctl removes administrator privileges on Windows before starting the
+        # server. Directly launching postgres under an elevated account is refused.
+        control = [self.binary("pg_ctl"), "-D", str(self.cluster)]
+        try:
+            result = subprocess.run(
+                [
+                    *control,
+                    "start",
+                    "-l",
+                    str(self.directory / "postgres.log"),
+                    "-w",
+                    "-t",
+                    "45",
+                    "-o",
+                    " ".join(options),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=55,
+                check=False,
+            )
+            (self.directory / "pg_ctl.log").write_bytes(result.stdout)
+            if result.returncode:
+                raise self.startup_error("postgres", "Embedded PostgreSQL could not start")
+            pid = int((self.cluster / "postmaster.pid").read_text().splitlines()[0])
+            postgres = WindowsPostgresProcess(pid)
+        except BaseException:
+            # pg_ctl can time out after creating a server. Never leave that owned
+            # cluster running if startup or attaching its process handle fails.
+            try:
+                subprocess.run(
+                    [*control, "stop", "-m", "fast", "-w", "-t", "15"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=20,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                pass
+            raise
+        self.process_handles.append(postgres)
+        self.children.append(("postgres", postgres))
+        return postgres
+
     def start(self):
         self.directory.mkdir(parents=True, exist_ok=True)
         if not self.password or not self.token:
@@ -133,22 +240,7 @@ class EmbeddedBackend:
                 )
             finally:
                 Path(password_file.name).unlink(missing_ok=True)
-        postgres = self.start_child(
-            [
-                self.binary("postgres"),
-                "-D",
-                str(self.cluster),
-                "-h",
-                "127.0.0.1",
-                "-p",
-                str(self.port),
-                "-c",
-                "unix_socket_directories=",
-                "-c",
-                "max_connections=40",
-            ],
-            "postgres",
-        )
+        postgres = self.start_postgres()
         deadline = monotonic() + 45
         while True:
             if postgres.poll() is not None:
@@ -254,6 +346,9 @@ class EmbeddedBackend:
                 child.kill()
                 child.wait()
         self.children.clear()
+        for process in self.process_handles:
+            process.close()
+        self.process_handles.clear()
         for log in self.logs:
             log.close()
         self.logs.clear()

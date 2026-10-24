@@ -21,11 +21,6 @@ def execute_job(identifier, settings=None):
     job = store.job(UUID(str(identifier)))
     if not job or job["state"] != "running":
         return
-    diagnostic_delay = os.environ.get("AUTOSTACGIS_DEBUG_STACK_SECONDS")
-    if diagnostic_delay:
-        import faulthandler
-
-        faulthandler.dump_traceback_later(float(diagnostic_delay), repeat=True)
     try:
         directory = settings.data_dir / "work" / str(identifier)
         directory.mkdir(parents=True, exist_ok=True)
@@ -74,9 +69,6 @@ def execute_job(identifier, settings=None):
     except Exception as exc:
         store.finish(identifier, "failed", error=str(exc))
         raise
-    finally:
-        if diagnostic_delay:
-            faulthandler.cancel_dump_traceback_later()
 
 
 def execute_trigger(catalog, base_dir, request):

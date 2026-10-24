@@ -1,9 +1,14 @@
 import argparse
+import faulthandler
+import os
 
 from .config import Settings
 
 
 def main():
+    if diagnostic_delay := os.environ.get("AUTOSTACGIS_DEBUG_STACK_SECONDS"):
+        faulthandler.dump_traceback_later(float(diagnostic_delay), repeat=True)
+        print(f"AutostacGIS diagnostic process {os.getpid()}", flush=True)
     parser = argparse.ArgumentParser(description="Independent AutostacGIS PostgreSQL service")
     parser.add_argument("command", choices=["serve", "worker", "migrate", "execute"])
     parser.add_argument("job_id", nargs="?")

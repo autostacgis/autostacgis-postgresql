@@ -10,6 +10,14 @@ from pathlib import Path, PurePosixPath
 
 def install_extensions(archive, destination):
     root = Path(destination).resolve()
+    # Native distributions use either prefix/{share,lib} or the PostgreSQL
+    # subdirectories beneath them. Contrib archives may use the other layout.
+    share = root / "share"
+    if (share / "postgresql" / "extension").is_dir():
+        share /= "postgresql"
+    library = root / "lib"
+    if (library / "postgresql").is_dir():
+        library /= "postgresql"
     with zipfile.ZipFile(archive) as jar:
         payloads = [name for name in jar.namelist() if name.endswith(".txz")]
         if len(payloads) != 1:
@@ -23,7 +31,16 @@ def install_extensions(archive, destination):
                 dependency = os.name == "nt" and relative.parts[0] == "bin" and name.endswith(".dll")
                 if not (required or dependency) or not entry.isfile():
                     continue
-                target = (root / entry.name).resolve()
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise ValueError("Extension archive path escapes the runtime")
+                parts = relative.parts
+                if parts[0] in {"share", "lib"}:
+                    tail = parts[1:]
+                    if tail and tail[0] == "postgresql":
+                        tail = tail[1:]
+                    target = (share if parts[0] == "share" else library).joinpath(*tail).resolve()
+                else:
+                    target = (root / entry.name).resolve()
                 if not target.is_relative_to(root):
                     raise ValueError("Extension archive path escapes the runtime")
                 if dependency and target.exists():

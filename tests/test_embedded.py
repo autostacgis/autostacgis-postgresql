@@ -90,3 +90,39 @@ def test_startup_failure_includes_recent_logs_without_credentials(tmp_path):
     assert "password" not in error
     assert len(error) < 6100
     assert "see postgres.log" in error
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_contrib_files_follow_the_native_runtime_layout(tmp_path, nested):
+    root = tmp_path / "runtime"
+    share = root / "share" / "postgresql" if nested else root / "share"
+    library = root / "lib" / "postgresql" if nested else root / "lib"
+    (share / "extension").mkdir(parents=True)
+    library.mkdir(parents=True)
+    files = {
+        "share/extension/btree_gist.control": b"control",
+        "share/extension/btree_gist--1.0.sql": b"sql",
+        "share/extension/unaccent.control": b"control",
+        "share/extension/unaccent--1.0.sql": b"sql",
+        "share/tsearch_data/unaccent.rules": b"rules",
+        "lib/btree_gist.dll": b"library",
+        "lib/unaccent.dll": b"library",
+    }
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w:xz") as bundle:
+        for name, payload in files.items():
+            entry = tarfile.TarInfo(name)
+            entry.size = len(payload)
+            bundle.addfile(entry, io.BytesIO(payload))
+    archive = tmp_path / "extensions.jar"
+    with zipfile.ZipFile(archive, "w") as jar:
+        jar.writestr("postgres.txz", data.getvalue())
+    install_extensions(archive, root)
+    assert (share / "extension/btree_gist.control").read_bytes() == b"control"
+    assert (share / "extension/unaccent--1.0.sql").read_bytes() == b"sql"
+    assert (share / "tsearch_data/unaccent.rules").read_bytes() == b"rules"
+    assert (library / "btree_gist.dll").read_bytes() == b"library"
+    assert (library / "unaccent.dll").read_bytes() == b"library"
+    if nested:
+        assert not (root / "share/extension").exists()
+        assert not (root / "lib/btree_gist.dll").exists()

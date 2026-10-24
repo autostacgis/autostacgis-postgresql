@@ -173,24 +173,26 @@ class EmbeddedBackend:
         # server. Directly launching postgres under an elevated account is refused.
         control = [self.binary("pg_ctl"), "-D", str(self.cluster)]
         try:
-            result = subprocess.run(
-                [
-                    *control,
-                    "start",
-                    "-l",
-                    str(self.directory / "postgres.log"),
-                    "-w",
-                    "-t",
-                    "45",
-                    "-o",
-                    " ".join(options),
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=55,
-                check=False,
-            )
-            (self.directory / "pg_ctl.log").write_bytes(result.stdout)
+            # A Windows daemon inherits its launcher handles. A pipe would
+            # keep communicate() waiting for EOF until the server shuts down.
+            with (self.directory / "pg_ctl.log").open("ab", buffering=0) as log:
+                result = subprocess.run(
+                    [
+                        *control,
+                        "start",
+                        "-l",
+                        str(self.directory / "postgres.log"),
+                        "-w",
+                        "-t",
+                        "45",
+                        "-o",
+                        " ".join(options),
+                    ],
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    timeout=55,
+                    check=False,
+                )
             if result.returncode:
                 raise self.startup_error("postgres", "Embedded PostgreSQL could not start")
             pid = int((self.cluster / "postmaster.pid").read_text().splitlines()[0])

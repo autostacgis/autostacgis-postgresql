@@ -47,3 +47,33 @@ jobs:
         env:
           POSTGRES_PASSWORD: ci-container-password
           AUTOSTACGIS_API_TOKEN: ci-api-token
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: autostacgis-web
+    steps:
+      - uses: actions/checkout@v4
+        with: {path: autostacgis-postgresql}
+      - uses: actions/checkout@v4
+        with: {repository: autostacgis/autostacgis-python, path: autostacgis-python}
+      - uses: actions/checkout@v4
+        with: {repository: autostacgis/autostacgis-plugins, path: autostacgis-plugins}
+      - uses: actions/checkout@v4
+        with: {repository: autostacgis/autostacgis-web, path: autostacgis-web}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install build
+      - name: Bundle service and engine wheels
+        run: node scripts/bundle-backend.mjs
+      - name: Verify native backend lifecycle and persistence
+        run: node scripts/smoke-embedded.mjs
+      - name: Verify plugins, workflows, and strict metadata
+        run: node scripts/smoke-plugins.mjs

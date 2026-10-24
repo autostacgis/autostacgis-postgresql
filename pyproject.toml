@@ -3,12 +3,12 @@ requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 [project]
 name = "autostacgis-postgresql"
-version = "0.2.0"
+version = "0.3.0"
 description = "Independent pgSTAC service and AutostacGIS workflow API"
 requires-python = ">=3.12"
 readme = "README.md"
 license = "GPL-3.0-only"
-dependencies = ["stac-fastapi-pgstac==7.1.0", "pypgstac==0.9.9", "titiler.core==1.2.1", "psycopg[binary,pool]>=3.2,<4", "uvicorn>=0.38,<1", "pydantic-settings>=2.7,<3", "autostacgis==1.1.0", "autostacgis-plugins[triggers]==1.1.0"]
+dependencies = ["stac-fastapi-pgstac==7.1.0", "pypgstac==0.9.9", "titiler.core==1.2.1", "psycopg[binary,pool]>=3.2,<4", "uvicorn>=0.38,<1", "pydantic-settings>=2.7,<3", "autostacgis==1.2.0", "autostacgis-plugins[triggers]==1.2.0"]
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "httpx>=0.28,<1", "ruff>=0.12", "build>=1,<2"]
 [project.scripts]

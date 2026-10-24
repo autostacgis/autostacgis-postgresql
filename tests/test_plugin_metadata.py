@@ -41,12 +41,13 @@ def test_installed_plugin_may_import_its_implementation_from_a_shared_library(tm
     monkeypatch.setenv("AUTOSTACGIS_PLUGIN_DIR", str(tmp_path))
     PluginManager(tmp_path).install_file(
         "shared_service.py",
-        """ID = "shared-service"
+        '''"""Expose the executor service through a custom shared-library adapter."""
+ID = "shared-service"
 VERSION = "1.0.0"
 CAPABILITY = "services"
 REQUIRES = ["executor"]
 from autostacgis_plugins.executor import executor as IMPLEMENTATION
-""",
+''',
     )
     row = next(row for row in plugins()["plugins"] if row["id"] == "shared-service")
     assert row["version"] == "1.0.0"

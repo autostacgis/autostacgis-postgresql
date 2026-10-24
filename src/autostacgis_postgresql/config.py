@@ -14,4 +14,5 @@ class Settings(BaseSettings):
     job_poll_seconds: float = Field(default=1, gt=0)
     result_collection: str = "autostacgis-results"
     plugin_registry_url: str = "https://autostacgis.github.io/autostacgis-plugins/plugins.json"
+    workflow_registry_url: str = "https://autostacgis.github.io/autostacgis-workflows/workflows.json"
     max_inputs: int = Field(default=1000, ge=1)

@@ -18,60 +18,13 @@ def describe(value):
 
 
 def plugins():
-    registry = Registry(builtins=True)
-    rows = []
-    for name, capabilities in registry.plugins.items():
-        capability, implementation = next(iter(capabilities.items()))
-        contract = deepcopy(getattr(implementation, "contract", {}))
-        rows.append(
-            {
-                "id": name,
-                "version": registry.versions[name],
-                "capability": capability,
-                "requires": list(registry.requirements[name]),
-                "defaults": deepcopy(registry.defaults[name].get(capability) or contract.get("settings", {})),
-                "settings_schema": deepcopy(
-                    getattr(
-                        implementation,
-                        "settings_schema",
-                        contract.get("settings_schema", {"type": "object", "additionalProperties": True}),
-                    )
-                ),
-                "contract": describe(contract),
-            }
-        )
+    from autostacgis.plugin_metadata import inventory
+    from autostacgis.workflow_config import default_workflow
+
     return {
         "capabilities": list(CAPABILITIES),
-        "plugins": rows,
-        "default_configuration": {
-            "catalog": {
-                "version": "1.0.0",
-                "plugins": [
-                    {"use": name}
-                    for name in (
-                        "stac-source",
-                        "metadata-value",
-                        "executor",
-                        "storage",
-                        "events",
-                        "geotiff",
-                        "parquet",
-                        "filesystem",
-                        "stac-json",
-                    )
-                ],
-            },
-            "metadata_structure": {
-                "schemas": [],
-                "inline": {
-                    "properties": {
-                        "properties": {"properties": {"autostacgis:source_item_id": {"type": "string"}}}
-                    }
-                },
-                "strict": True,
-            },
-            "request": {"sources": ["stac-source"], "goal": {"output": {}}},
-        },
+        "plugins": describe(inventory(Registry())),
+        "default_configuration": default_workflow(),
     }
 
 
@@ -79,6 +32,13 @@ def application(configuration, settings, directory=None):
     # Remote callers select installed names; importing arbitrary modules is a local Python API only.
     validate(configuration, "config")
     known = Registry(builtins=True).plugins
+    from autostacgis.workflow_config import is_workflow
+
+    if is_workflow(configuration):
+        for capability in CAPABILITIES:
+            for name in configuration.get(capability, {}):
+                if name not in known or capability not in known[name]:
+                    raise ValueError(f"Unavailable installed {capability} plugin: {name}")
     catalog = configuration.get("catalog")
     if catalog:
         for entry in catalog["plugins"]:
@@ -91,7 +51,7 @@ def application(configuration, settings, directory=None):
 
 def prepare(configuration, request, inputs, settings, directory=None):
     app = application(configuration, settings, directory)
-    request = app.request(request or configuration["request"])
+    request = app.request(request)
     records = None
     if inputs is not None:
         if len(inputs) > settings.max_inputs:

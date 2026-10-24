@@ -46,6 +46,39 @@ class Store:
                 (identifier, Jsonb(document)),
             ).fetchone()
 
+    def configuration(self, identifier):
+        with self.connection() as conn:
+            return conn.execute(
+                "SELECT id,document,updated_at FROM autostacgis.configurations WHERE id=%s", (identifier,)
+            ).fetchone()
+
+    def create_configuration(self, identifier, document):
+        with self.connection() as conn:
+            return conn.execute(
+                "INSERT INTO autostacgis.configurations(id,document) VALUES (%s,%s) ON CONFLICT DO NOTHING RETURNING id,document,updated_at",
+                (identifier, Jsonb(document)),
+            ).fetchone()
+
+    def update_configuration(self, identifier, document):
+        with self.connection() as conn:
+            return conn.execute(
+                "UPDATE autostacgis.configurations SET document=%s,updated_at=now() WHERE id=%s RETURNING id,document,updated_at",
+                (Jsonb(document), identifier),
+            ).fetchone()
+
+    def rename_configuration(self, identifier, name):
+        with self.connection() as conn:
+            return conn.execute(
+                "UPDATE autostacgis.configurations SET id=%s,updated_at=now() WHERE id=%s RETURNING id,document,updated_at",
+                (name, identifier),
+            ).fetchone()
+
+    def delete_configuration(self, identifier):
+        with self.connection() as conn:
+            return conn.execute(
+                "DELETE FROM autostacgis.configurations WHERE id=%s RETURNING id", (identifier,)
+            ).fetchone()
+
     def create_job(self, configuration, request, inputs, trigger_name=None):
         with self.connection() as conn:
             return conn.execute(

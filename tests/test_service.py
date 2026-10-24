@@ -321,3 +321,37 @@ def test_publication_cannot_silently_invalidate_metadata_goals(client, tmp_path)
     with pytest.raises(ValueError, match="Published outputs"):
         execute_job(identifier, client.app.state.autostacgis_settings)
     assert client.get("/autostacgis/jobs/" + identifier).json()["state"] == "failed"
+
+
+def test_grouped_workflow_crud_and_configured_trigger(client):
+    from autostacgis.workflow_config import default_workflow
+
+    document = default_workflow()
+    document["goal"]["metadata-value"] = {"jsonata": "item.properties.ready", "value": True}
+    value = {"configuration": document, "inputs": [item()]}
+    response = client.post("/autostacgis/validate", json=value)
+    assert response.status_code == 200, response.text
+    descriptor = client.get("/autostacgis/plugins").json()
+    assert set(descriptor["default_configuration"]) == {"solver", "goal"}
+    assert all(plugin["description"] for plugin in descriptor["plugins"])
+    name = "workflow-" + uuid4().hex
+    response = client.post("/autostacgis/workflows", json={"name": name, "document": document})
+    assert response.status_code == 201, response.text
+    assert client.post("/autostacgis/workflows", json={"name": name, "document": document}).status_code == 409
+    assert client.get("/autostacgis/workflows/" + name).json()["document"] == document
+    assert client.put("/autostacgis/workflows/" + name, json=document).status_code == 200
+    renamed = name + " renamed"
+    assert client.patch("/autostacgis/workflows/" + name, json={"name": renamed}).status_code == 200
+    assert client.get("/autostacgis/workflows/" + name).status_code == 404
+    assert client.delete("/autostacgis/workflows/" + renamed).status_code == 200
+    assert client.delete("/autostacgis/workflows/" + renamed).status_code == 404
+    assert client.post("/autostacgis/workflows", json={"name": "", "document": document}).status_code == 422
+    scheduled = {
+        **document,
+        "trigger": {"apscheduler": {"trigger": "interval", "trigger_args": {"hours": 1}}},
+    }
+    response = client.post("/autostacgis/jobs", json={"configuration": scheduled})
+    assert response.status_code == 202, response.text
+    job = client.get("/autostacgis/jobs/" + response.json()["id"]).json()
+    assert job["trigger_name"] == "apscheduler"
+    client.delete("/autostacgis/jobs/" + response.json()["id"])

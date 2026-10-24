@@ -144,6 +144,92 @@ def create_app(settings=None):
             raise HTTPException(422, str(exc)) from exc
         return store.save_configuration(identifier, document)
 
+    def workflow_manager():
+        from autostacgis.workflow_manager import WorkflowManager
+
+        return WorkflowManager(settings.workflow_registry_url)
+
+    def workflow_name(name):
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or len(name) > 200
+            or any(ord(c) < 32 or c in "/\\" for c in name)
+        ):
+            raise HTTPException(422, "Use a workflow name of 1–200 characters without slashes")
+        return name.strip()
+
+    @router.get("/workflows/available")
+    def published_workflows():
+        try:
+            return workflow_manager().catalog()
+        except Exception as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+    @router.get("/workflows/published/{identifier}")
+    def published_workflow(identifier: str, version: str | None = None):
+        try:
+            return workflow_manager().get(identifier, version)
+        except Exception as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+    @router.get("/workflows")
+    def saved_workflows():
+        return store.configurations()
+
+    @router.post("/workflows", status_code=201)
+    def copy_workflow(value: dict):
+        name = workflow_name(value.get("name"))
+        document = value.get("document")
+        try:
+            application, request, _ = engine.prepare(document, None, None, settings)
+            application.make_solver(request, [])
+        except Exception as exc:
+            raise HTTPException(422, str(exc)) from exc
+        result = store.create_configuration(name, document)
+        if result is None:
+            raise HTTPException(409, "A saved workflow already uses that name")
+        return result
+
+    @router.get("/workflows/{identifier}")
+    def saved_workflow(identifier: str):
+        result = store.configuration(identifier)
+        if result is None:
+            raise HTTPException(404, "Unknown saved workflow")
+        return result
+
+    @router.put("/workflows/{identifier}")
+    def update_workflow(identifier: str, document: dict):
+        workflow_name(identifier)
+        try:
+            application, request, _ = engine.prepare(document, None, None, settings)
+            application.make_solver(request, [])
+        except Exception as exc:
+            raise HTTPException(422, str(exc)) from exc
+        result = store.update_configuration(identifier, document)
+        if result is None:
+            raise HTTPException(404, "Unknown saved workflow")
+        return result
+
+    @router.patch("/workflows/{identifier}")
+    def rename_workflow(identifier: str, value: dict):
+        from psycopg.errors import UniqueViolation
+
+        try:
+            result = store.rename_configuration(identifier, workflow_name(value.get("name")))
+        except UniqueViolation as exc:
+            raise HTTPException(409, "A saved workflow already uses that name") from exc
+        if result is None:
+            raise HTTPException(404, "Unknown saved workflow")
+        return result
+
+    @router.delete("/workflows/{identifier}")
+    def delete_workflow(identifier: str):
+        result = store.delete_configuration(identifier)
+        if result is None:
+            raise HTTPException(404, "Unknown saved workflow")
+        return result
+
     @router.post("/validate")
     def validate_configuration(value: Invocation):
         try:
@@ -168,6 +254,13 @@ def create_app(settings=None):
                 value.configuration, value.request, value.inputs, settings
             )
             application.make_solver(request, records or [])
+            configured_trigger = application.trigger_name
+            if configured_trigger and configured_trigger != "now":
+                if configured_trigger not in ("apscheduler", "watchdog"):
+                    raise ValueError("This trigger runs through the local Python CLI")
+                if value.trigger and value.trigger != configured_trigger:
+                    raise ValueError("Trigger must match the workflow configuration")
+                value.trigger = configured_trigger
             if value.trigger:
                 if value.inputs is not None:
                     raise ValueError("Trigger jobs discover their inputs afresh; do not provide fixed inputs")

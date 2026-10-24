@@ -138,6 +138,8 @@ def supervise(job, settings):
         child = subprocess.Popen(
             [sys.executable, "-m", "autostacgis_postgresql.cli", "execute", str(job["id"])],
             env=env,
+            # Isolated jobs must not inherit the managed worker's stop-input pipe.
+            stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,
             start_new_session=os.name != "nt",

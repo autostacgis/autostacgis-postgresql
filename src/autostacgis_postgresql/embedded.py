@@ -94,6 +94,18 @@ class EmbeddedBackend:
         self.children.append((name, child))
         return child
 
+    def startup_error(self, name, message):
+        log_path = self.directory / (name + ".log")
+        detail = ""
+        if log_path.exists():
+            with log_path.open("rb") as log:
+                log.seek(max(0, log_path.stat().st_size - 6000))
+                detail = log.read().decode("utf-8", errors="replace").strip()
+        for secret in (self.password, self.token):
+            if secret:
+                detail = detail.replace(secret, "[redacted]").replace(quote(secret, safe=""), "[redacted]")
+        return RuntimeError(f"{message}; see {name}.log" + (f"\n{detail}" if detail else ""))
+
     def start(self):
         self.directory.mkdir(parents=True, exist_ok=True)
         if not self.password or not self.token:
@@ -140,7 +152,7 @@ class EmbeddedBackend:
         deadline = monotonic() + 45
         while True:
             if postgres.poll() is not None:
-                raise RuntimeError("Embedded PostgreSQL exited; see postgres.log")
+                raise self.startup_error("postgres", "Embedded PostgreSQL exited")
             try:
                 with psycopg.connect(
                     self.dsn.rsplit("/", 1)[0] + "/postgres", connect_timeout=1, autocommit=True
@@ -150,7 +162,7 @@ class EmbeddedBackend:
                 break
             except psycopg.OperationalError:
                 if monotonic() > deadline or self.stopped.is_set():
-                    raise RuntimeError("Embedded PostgreSQL did not become ready") from None
+                    raise self.startup_error("postgres", "Embedded PostgreSQL did not become ready") from None
                 sleep(0.1)
         from pypgstac.db import PgstacDB
         from pypgstac.migrate import Migrate
@@ -189,7 +201,7 @@ class EmbeddedBackend:
         deadline = monotonic() + 60
         while True:
             if api.poll() is not None:
-                raise RuntimeError("Embedded API exited; see api.log")
+                raise self.startup_error("api", "Embedded API exited")
             try:
                 with urlopen(self.url + "/_mgmt/ping", timeout=1) as response:
                     if response.status == 200:
@@ -199,7 +211,7 @@ class EmbeddedBackend:
             except OSError:
                 pass
             if monotonic() > deadline or self.stopped.is_set():
-                raise RuntimeError("Embedded API did not become ready")
+                raise self.startup_error("api", "Embedded API did not become ready")
             sleep(0.1)
 
     def stop(self):

@@ -78,3 +78,15 @@ def test_native_backend_preserves_catalog_across_stop_and_restart(tmp_path):
         finally:
             again.stop()
         assert not (backend.cluster / "postmaster.pid").exists()
+
+
+def test_startup_failure_includes_recent_logs_without_credentials(tmp_path):
+    backend = EmbeddedBackend(tmp_path, tmp_path, "password with spaces", "private-token")
+    (tmp_path / "postgres.log").write_text(
+        "old message\n" * 1000 + "startup failed password%20with%20spaces private-token\n"
+    )
+    error = str(backend.startup_error("postgres", "Embedded PostgreSQL exited"))
+    assert "startup failed [redacted] [redacted]" in error
+    assert "password" not in error
+    assert len(error) < 6100
+    assert "see postgres.log" in error

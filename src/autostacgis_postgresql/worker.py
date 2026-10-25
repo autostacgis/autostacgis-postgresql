@@ -14,7 +14,7 @@ from .store import Store
 
 
 def execute_job(identifier, settings=None):
-    from .engine import persist, prepare
+    from .engine import durable_item, persist, prepare
 
     settings = settings or Settings()
     store = Store(settings)
@@ -62,8 +62,14 @@ def execute_job(identifier, settings=None):
             "extent": {"spatial": {"bbox": [[-180, -90, 180, 90]]}, "temporal": {"interval": [[None, None]]}},
         }
         with store.connection() as conn:
-            conn.execute("SELECT pgstac.upsert_collection(%s)", (Jsonb(collection),))
-            for item in outputs["features"]:
+            items = [
+                item
+                for item in outputs["features"]
+                if item["id"] in outputs.get("saved", []) and durable_item(item)
+            ]
+            if items:
+                conn.execute("SELECT pgstac.upsert_collection(%s)", (Jsonb(collection),))
+            for item in items:
                 conn.execute("SELECT pgstac.upsert_item(%s)", (Jsonb(item),))
         store.finish(identifier, "succeeded", outputs)
     except Exception as exc:
@@ -74,7 +80,7 @@ def execute_job(identifier, settings=None):
 def execute_trigger(catalog, base_dir, request):
     from uuid import uuid4
 
-    from .engine import persist
+    from .engine import durable_item, persist
 
     settings = Settings()
     import os
@@ -109,8 +115,14 @@ def execute_trigger(catalog, base_dir, request):
             "extent": {"spatial": {"bbox": [[-180, -90, 180, 90]]}, "temporal": {"interval": [[None, None]]}},
         }
         with Store(settings).connection() as conn:
-            conn.execute("SELECT pgstac.upsert_collection(%s)", (Jsonb(collection),))
-            for item in outputs["features"]:
+            items = [
+                item
+                for item in outputs["features"]
+                if item["id"] in outputs.get("saved", []) and durable_item(item)
+            ]
+            if items:
+                conn.execute("SELECT pgstac.upsert_collection(%s)", (Jsonb(collection),))
+            for item in items:
                 conn.execute("SELECT pgstac.upsert_item(%s)", (Jsonb(item),))
             if os.environ.get("AUTOSTACGIS_TRIGGER_JOB_ID"):
                 conn.execute(

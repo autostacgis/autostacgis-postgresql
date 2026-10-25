@@ -9,6 +9,7 @@ root = Path(__file__).resolve().parents[1]
 (root / "wheels").mkdir(exist_ok=True)
 for path in (root / "wheels").glob("autostacgis*.whl"):
     path.unlink()
+(root / "wheels/backend-release.json").unlink(missing_ok=True)
 for name in ("autostacgis-python", "autostacgis-plugins"):
     source = root.parent / name
     if not (source / "pyproject.toml").exists():

@@ -1,4 +1,5 @@
 PYTHON ?= python3
+VERSION ?= 0.0.1
 .PHONY: install dev test build dev-build release release-manifest
 install: build
 	$(PYTHON) -m pip install --find-links wheels -e '.[dev]'

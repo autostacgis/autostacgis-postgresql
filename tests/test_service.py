@@ -46,7 +46,7 @@ def invocation():
     return {
         "configuration": {
             "catalog": {
-                "version": "1.0.0",
+                "version": "0.0.1",
                 "plugins": [{"use": name} for name in ("metadata-value", "executor", "storage", "events")],
             },
             "request": {
@@ -148,6 +148,23 @@ def test_durable_queue_claim_execution_and_result_ingest(client, tmp_path):
         raster.write(np.ones((1, 32, 32), dtype="uint16"))
     value = invocation()
     value["inputs"][0]["assets"]["data"]["href"] = str(path)
+    value["configuration"] = {
+        "solver": {"backward_chain": {}},
+        "goal": {"metadata-value": {"path": "assets.$asset.data_state:statistics_calculated", "value": True}},
+        "process": {
+            "statistics": {
+                "outputs": {
+                    "result": {
+                        "save": True,
+                        "data_out": {
+                            "plugin": "filesystem",
+                            "settings": {"path": str(tmp_path / "saved_statistics.tif")},
+                        },
+                    }
+                }
+            }
+        },
+    }
     response = client.post("/autostacgis/jobs", json=value)
     assert response.status_code == 202, response.text
     identifier = response.json()["id"]
@@ -175,16 +192,16 @@ def test_durable_queue_claim_execution_and_result_ingest(client, tmp_path):
     response = client.get(urlsplit(href).path, headers={"Range": "bytes=0-15"})
     assert response.status_code == 206, response.text
     assert len(response.content) == 16
-    artifact = (
-        client.app.state.autostacgis_settings.data_dir
-        / "results"
-        / identifier
-        / urlsplit(href).path.rsplit("/", 1)[1]
+    from autostacgis_postgresql.engine import asset_file
+
+    artifact = asset_file(
+        client.app.state.autostacgis_settings, identifier, urlsplit(href).path.rsplit("/", 1)[1]
     )
     import json
 
     with rasterio.open(artifact) as raster:
-        assert json.loads(raster.tags()["STAC"]) == output
+        assert json.loads(raster.tags()["STAC"])["assets"]["data"]["data_state:statistics_calculated"] is True
+    assert artifact == tmp_path / "saved_statistics.tif"
     assert client.get("/cog/info", params={"url": str(path)}).status_code == 422
 
 
@@ -288,7 +305,7 @@ def test_timed_trigger_runs_in_a_supervised_process_and_can_be_cancelled(client,
     assert store.job(UUID(identifier))["state"] == "cancelled"
 
 
-def test_publication_cannot_silently_invalidate_metadata_goals(client, tmp_path):
+def test_unsaved_result_metadata_keeps_the_requested_identity(client, tmp_path):
     import numpy as np
     import rasterio
     from rasterio.transform import from_bounds
@@ -318,9 +335,11 @@ def test_publication_cannot_silently_invalidate_metadata_goals(client, tmp_path)
     store = client.app.state.store
     with store.connection() as conn:
         conn.execute("UPDATE autostacgis.jobs SET state='running' WHERE id=%s", (identifier,))
-    with pytest.raises(ValueError, match="Published outputs"):
-        execute_job(identifier, client.app.state.autostacgis_settings)
-    assert client.get("/autostacgis/jobs/" + identifier).json()["state"] == "failed"
+    execute_job(identifier, client.app.state.autostacgis_settings)
+    completed = store.job(identifier)
+    assert completed["state"] == "succeeded"
+    assert completed["result"]["features"][0]["id"] == value["inputs"][0]["id"]
+    assert client.get("/autostacgis/jobs/" + identifier).json()["state"] == "succeeded"
 
 
 def test_grouped_workflow_crud_and_configured_trigger(client):
@@ -332,7 +351,8 @@ def test_grouped_workflow_crud_and_configured_trigger(client):
     response = client.post("/autostacgis/validate", json=value)
     assert response.status_code == 200, response.text
     descriptor = client.get("/autostacgis/plugins").json()
-    assert set(descriptor["default_configuration"]) == {"solver", "goal"}
+    assert set(descriptor["default_configuration"]) == {"solver", "goal", "process", "execution"}
+    assert "mosaic" in descriptor["default_configuration"]["process"]
     assert all(plugin["description"] for plugin in descriptor["plugins"])
     name = "workflow-" + uuid4().hex
     response = client.post("/autostacgis/workflows", json={"name": name, "document": document})

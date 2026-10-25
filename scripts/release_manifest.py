@@ -7,7 +7,7 @@ from pathlib import Path
 
 parser = argparse.ArgumentParser()
 parser.add_argument("version")
-parser.add_argument("--minimum-app", default="0.3.0")
+parser.add_argument("--minimum-app", default="0.0.1")
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 wheels = sorted((root / "wheels").glob("autostacgis*.whl"))

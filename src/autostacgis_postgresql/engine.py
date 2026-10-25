@@ -1,6 +1,7 @@
+import json
 from copy import deepcopy
+from pathlib import Path
 from urllib.parse import quote, urlsplit
-from uuid import uuid4
 
 from autostacgis import Application, Record, Registry
 from autostacgis.config import validate
@@ -65,56 +66,85 @@ def prepare(configuration, request, inputs, settings, directory=None):
     return app, request, records
 
 
-def persist(records, settings, identifier, validate=None, stac=None):
-    from autostacgis.data.writers import write_parquet, write_raster
+def durable_item(item):
+    """Transient payload handles must never become persistent catalog assets."""
+    return bool(item.get("assets")) and all(
+        urlsplit(asset.get("href", "")).scheme not in ("autostacgis", "memory")
+        for asset in item["assets"].values()
+    )
 
-    directory = settings.data_dir / "results" / str(identifier)
-    directory.mkdir(parents=True, exist_ok=True)
-    items = []
-    published = []
+
+def asset_file(settings, identifier, name):
+    """Resolve an explicitly saved file without duplicating its data."""
+    root = (settings.data_dir / "results").resolve()
+    directory = (root / str(identifier)).resolve()
+    if not directory.is_relative_to(root):
+        raise FileNotFoundError(name)
+    manifest = directory / "files.json"
+    if manifest.is_file():
+        files = json.loads(manifest.read_text())
+        if name in files:
+            target = Path(files[name])
+            if target.is_file():
+                return target
+    # Continue serving artifacts made by earlier development builds.
+    target = (directory / name).resolve()
+    if target.is_relative_to(directory) and target.is_file() and target.name != "files.json":
+        return target
+    raise FileNotFoundError(name)
+
+
+def persist(records, settings, identifier, validate=None, stac=None):
+    """Return result metadata; only expose files explicitly saved by a result policy.
+
+    No encoding, copying or materialization takes place here. The process result's
+    configured encoder/data_out pipeline owns all durable output bytes.
+    """
+    from autostacgis.io import is_local, local
+
+    items, published, files, saved = [], [], {}, []
     for record in records:
         item = deepcopy(record.item)
-        asset = record.runtime.get("selected_asset", "data")
-        item["properties"]["autostacgis:source_item_id"] = item["id"]
-        item["id"] = str(identifier) + "-" + record.key
-        item["collection"] = settings.result_collection
-        item["links"] = [
-            {
-                "rel": "collection",
-                "href": f"{settings.public_url.rstrip('/')}/collections/{quote(settings.result_collection, safe='')}",
-                "type": "application/json",
-            }
-        ]
-        if record.payload is not None:
-            stem = uuid4().hex
-            if record.kind == "raster":
-                name = stem + ".tif"
-                media = "image/tiff; application=geotiff; profile=cloud-optimized"
-            else:
-                name = stem + ".parquet"
-                media = "application/vnd.apache.parquet"
-            item.setdefault("assets", {}).setdefault(asset, {}).update(
-                href=f"{settings.public_url.rstrip('/')}/assets/{identifier}/{name}", type=media
-            )
-            if record.kind == "raster":
-                write_raster(record.payload, directory / name, driver="COG", stac=item, asset_key=asset)
-            else:
-                write_parquet(record.payload, directory / name)
-        elif any(
-            urlsplit(a.get("href", "")).scheme not in ("http", "https", "s3", "gs", "az")
-            for a in item.get("assets", {}).values()
-        ):
-            raise ValueError(
-                "Result has local or transient assets without a payload; configure durable publication"
-            )
+        if record.runtime.get("saved"):
+            for key, asset in item.get("assets", {}).items():
+                href = asset.get("href", "")
+                if is_local(href):
+                    target = local(href).resolve()
+                    if not target.is_file():
+                        continue  # Directory outputs keep their destination reference.
+                    name = record.key + "-" + str(len(files)) + target.suffix
+                    files[name] = str(target)
+                    asset["href"] = (
+                        f"{settings.public_url.rstrip('/')}/assets/{identifier}/{quote(name, safe='')}"
+                    )
+        if record.runtime.get("saved") and durable_item(item):
+            item["properties"]["autostacgis:source_item_id"] = item["id"]
+            item["id"] = str(identifier) + "-" + record.key
+            item["collection"] = settings.result_collection
+            saved.append(item["id"])
+            item["links"] = [
+                {
+                    "rel": "collection",
+                    "href": f"{settings.public_url.rstrip('/')}/collections/{quote(settings.result_collection, safe='')}",
+                    "type": "application/json",
+                }
+            ]
         value = record.clone()
         value.item = item
         published.append(value)
         if stac is not None:
+            if record.runtime.get("saved"):
+                stac.extensions(item)
             stac.validate(item)
         items.append(item)
     if validate is not None and not validate(published):
         raise ValueError(
-            "Published outputs no longer satisfy the requested goal; publication changes IDs, collection, and asset URLs"
+            "Saved output metadata no longer satisfies the requested goal; catalog registration changes IDs, collection, and asset URLs"
         )
-    return {"type": "FeatureCollection", "features": items}
+    if files:
+        directory = settings.data_dir / "results" / str(identifier)
+        directory.mkdir(parents=True, exist_ok=True)
+        temporary = directory / ".files.json"
+        temporary.write_text(json.dumps(files))
+        temporary.replace(directory / "files.json")
+    return {"type": "FeatureCollection", "features": items, "saved": saved}

@@ -5,8 +5,7 @@ from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from stac_fastapi.pgstac.app import instantiate_api
 from stac_fastapi.pgstac.config import PostgresSettings
@@ -63,7 +62,7 @@ def create_app(settings=None):
         stac_fastapi_title="AutostacGIS STAC API",
         stac_fastapi_description="pgSTAC catalog and AutostacGIS workflows",
         stac_fastapi_landing_id="autostacgis",
-        stac_fastapi_version="1.0.0",
+        stac_fastapi_version="0.0.1",
         enable_transactions_extensions=True,
         cors_origins=settings.cors_origins,
         cors_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -299,10 +298,13 @@ def create_app(settings=None):
         if (source.scheme, source.netloc) == (public.scheme, public.netloc) and source.path.startswith(
             prefix
         ):
-            root = (settings.data_dir / "results").resolve()
-            target = (root / unquote(source.path[len(prefix) :])).resolve()
-            if not target.is_relative_to(root) or not target.is_file():
+            parts = unquote(source.path[len(prefix) :]).split("/")
+            if len(parts) != 2:
                 raise HTTPException(404, "Unknown result asset")
+            try:
+                target = engine.asset_file(settings, parts[0], parts[1])
+            except FileNotFoundError:
+                raise HTTPException(404, "Unknown result asset") from None
             # Read our own immutable artifacts directly; avoid an HTTP round trip
             # into the same process while GDAL is opening a dataset.
             return str(target)
@@ -320,5 +322,12 @@ def create_app(settings=None):
     app.include_router(tiler.router, prefix="/cog", tags=["Raster preview"])
     add_exception_handlers(app, DEFAULT_STATUS_CODES)
     app.include_router(router)
-    app.mount("/assets", StaticFiles(directory=settings.data_dir / "results"), name="assets")
+
+    @app.get("/assets/{identifier}/{name}")
+    def result_asset(identifier: UUID, name: str):
+        try:
+            return FileResponse(engine.asset_file(settings, identifier, name))
+        except FileNotFoundError:
+            raise HTTPException(404, "Unknown result asset") from None
+
     return app

@@ -33,26 +33,16 @@ def application(configuration, settings, directory=None):
     # Remote callers select installed names; importing arbitrary modules is a local Python API only.
     validate(configuration, "config")
     known = Registry(builtins=True).plugins
-    from autostacgis.workflow_config import is_workflow
-
-    if is_workflow(configuration):
-        for capability in CAPABILITIES:
-            for name in configuration.get(capability, {}):
-                if name not in known or capability not in known[name]:
-                    raise ValueError(f"Unavailable installed {capability} plugin: {name}")
-    catalog = configuration.get("catalog")
-    if catalog:
-        for entry in catalog["plugins"]:
-            if "use" not in entry or entry["use"] not in known:
-                raise ValueError(
-                    "API catalogs must select installed plugins using {use: name, settings: {...}}"
-                )
+    for capability in CAPABILITIES:
+        for name in configuration.get(capability, {}):
+            if name not in known or capability not in known[name]:
+                raise ValueError(f"Unavailable installed {capability} plugin: {name}")
     return Application(configuration, base_dir=directory or settings.data_dir)
 
 
-def prepare(configuration, request, inputs, settings, directory=None):
+def prepare(configuration, inputs, settings, directory=None):
     app = application(configuration, settings, directory)
-    request = app.request(request)
+    execution = app._execution()
     records = None
     if inputs is not None:
         if len(inputs) > settings.max_inputs:
@@ -63,7 +53,7 @@ def prepare(configuration, request, inputs, settings, directory=None):
             from autostacgis.data.kinds import describe_kinds
 
             records.append(describe_kinds(Record(deepcopy(item))))
-    return app, request, records
+    return app, execution, records
 
 
 def durable_item(item):
@@ -87,10 +77,6 @@ def asset_file(settings, identifier, name):
             target = Path(files[name])
             if target.is_file():
                 return target
-    # Continue serving artifacts made by earlier development builds.
-    target = (directory / name).resolve()
-    if target.is_relative_to(directory) and target.is_file() and target.name != "files.json":
-        return target
     raise FileNotFoundError(name)
 
 

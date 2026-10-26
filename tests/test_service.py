@@ -45,15 +45,10 @@ def item():
 def invocation():
     return {
         "configuration": {
-            "catalog": {
-                "version": "0.0.1",
-                "plugins": [{"use": name} for name in ("metadata-value", "executor", "storage", "events")],
-            },
-            "request": {
-                "goal": {
-                    "plugin": "metadata-value",
-                    "settings": {"jsonata": "item.properties.ready", "value": True},
-                }
+            "solver": {"backward_chain": {}},
+            "goal": {"metadata-value": {"jsonata": "item.properties.ready", "value": True}},
+            "metadata_structure": {
+                "inline": {"properties": {"properties": {"properties": {"ready": {"type": "boolean"}}}}}
             },
         },
         "inputs": [item()],
@@ -117,14 +112,16 @@ def test_configuration_validation_planning_and_name_safety(client):
     assert response.status_code == 200, response.text
     assert response.json()["steps"] == []
     identifier = uuid4().hex
-    response = client.put("/autostacgis/configurations/" + identifier, json=value["configuration"])
-    assert response.status_code == 200, response.text
-    assert any(row["id"] == identifier for row in client.get("/autostacgis/configurations").json())
+    response = client.post(
+        "/autostacgis/workflows", json={"name": identifier, "document": value["configuration"]}
+    )
+    assert response.status_code == 201, response.text
+    assert any(row["id"] == identifier for row in client.get("/autostacgis/workflows").json())
     invalid = deepcopy(value)
-    invalid["configuration"]["catalog"]["plugins"] = [{"use": "os.system"}]
+    invalid["configuration"]["process"] = {"os.system": {}}
     assert client.post("/autostacgis/validate", json=invalid).status_code == 422
     invalid = deepcopy(value)
-    invalid["configuration"]["request"]["goal"]["settings"]["typo"] = 1
+    invalid["configuration"]["goal"]["metadata-value"]["typo"] = 1
     assert client.post("/autostacgis/validate", json=invalid).status_code == 422
 
 
@@ -149,6 +146,7 @@ def test_durable_queue_claim_execution_and_result_ingest(client, tmp_path):
     value = invocation()
     value["inputs"][0]["assets"]["data"]["href"] = str(path)
     value["configuration"] = {
+        "metadata_structure": invocation()["configuration"]["metadata_structure"],
         "solver": {"backward_chain": {}},
         "goal": {"metadata-value": {"path": "assets.$asset.data_state:statistics_calculated", "value": True}},
         "process": {
@@ -214,18 +212,14 @@ def test_cancelled_jobs_are_not_claimed_or_completed(client):
 
 def test_trigger_jobs_expose_raw_options_and_require_fresh_discovery(client):
     value = invocation()
-    value["configuration"]["catalog"]["plugins"].append(
-        {
-            "use": "apscheduler",
-            "settings": {
-                "scheduler": {"timezone": "UTC"},
-                "trigger": "interval",
-                "trigger_args": {"seconds": 30},
-                "job": {"misfire_grace_time": 10},
-            },
+    value["configuration"]["trigger"] = {
+        "apscheduler": {
+            "scheduler": {"timezone": "UTC"},
+            "trigger": "interval",
+            "trigger_args": {"seconds": 30},
+            "job": {"misfire_grace_time": 10},
         }
-    )
-    value["trigger"] = "apscheduler"
+    }
     assert client.post("/autostacgis/jobs", json=value).status_code == 422
     del value["inputs"]
     response = client.post("/autostacgis/jobs", json=value)
@@ -266,19 +260,14 @@ def test_timed_trigger_runs_in_a_supervised_process_and_can_be_cancelled(client,
     metadata.write_text(json.dumps(source))
     value = invocation()
     del value["inputs"]
-    value["trigger"] = "apscheduler"
-    value["configuration"]["catalog"]["plugins"] += [
-        {"use": "stac-source", "settings": {"items": [str(metadata)]}},
-        {
-            "use": "apscheduler",
-            "settings": {
-                "scheduler": {"timezone": "UTC"},
-                "trigger": "interval",
-                "trigger_args": {"seconds": 0.2},
-            },
-        },
-    ]
-    value["configuration"]["request"]["sources"] = ["stac-source"]
+    value["configuration"]["metadata_in"] = {"stac-source": {"items": [str(metadata)]}}
+    value["configuration"]["trigger"] = {
+        "apscheduler": {
+            "scheduler": {"timezone": "UTC"},
+            "trigger": "interval",
+            "trigger_args": {"seconds": 0.2},
+        }
+    }
     response = client.post("/autostacgis/jobs", json=value)
     assert response.status_code == 202, response.text
     identifier = response.json()["id"]
@@ -325,7 +314,7 @@ def test_unsaved_result_metadata_keeps_the_requested_identity(client, tmp_path):
         raster.write(np.ones((1, 32, 32), dtype="uint16"))
     value = invocation()
     value["inputs"][0]["assets"]["data"]["href"] = str(path)
-    value["configuration"]["request"]["goal"]["settings"] = {
+    value["configuration"]["goal"]["metadata-value"] = {
         "jsonata": "item.id",
         "value": value["inputs"][0]["id"],
     }
@@ -346,6 +335,7 @@ def test_grouped_workflow_crud_and_configured_trigger(client):
     from autostacgis.workflow_config import default_workflow
 
     document = default_workflow()
+    document["metadata_structure"] = invocation()["configuration"]["metadata_structure"]
     document["goal"]["metadata-value"] = {"jsonata": "item.properties.ready", "value": True}
     value = {"configuration": document, "inputs": [item()]}
     response = client.post("/autostacgis/validate", json=value)
@@ -375,3 +365,20 @@ def test_grouped_workflow_crud_and_configured_trigger(client):
     job = client.get("/autostacgis/jobs/" + response.json()["id"]).json()
     assert job["trigger_name"] == "apscheduler"
     client.delete("/autostacgis/jobs/" + response.json()["id"])
+
+
+@pytest.mark.parametrize("field,value", [("request", {}), ("trigger", "watchdog")])
+def test_separate_configuration_overrides_are_rejected(client, field, value):
+    document = invocation()
+    document[field] = value
+    assert client.post("/autostacgis/validate", json=document).status_code == 400
+
+
+def test_old_configuration_documents_are_rejected(client):
+    value = invocation()
+    value["configuration"] = {
+        "catalog": {"version": "0.0.1", "plugins": []},
+        "request": {"goal": {"output": {}}},
+    }
+    assert client.post("/autostacgis/validate", json=value).status_code == 422
+    assert client.get("/autostacgis/configurations").status_code == 404

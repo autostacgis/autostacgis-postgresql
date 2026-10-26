@@ -24,19 +24,20 @@ def execute_job(identifier, settings=None):
     try:
         directory = settings.data_dir / "work" / str(identifier)
         directory.mkdir(parents=True, exist_ok=True)
-        app, request, inputs = prepare(job["configuration"], job["request"], job["inputs"], settings)
-        request["work_directory"] = str(directory)
+        configuration = dict(job["configuration"])
+        configuration["execution"] = {**configuration.get("execution", {}), "work_directory": str(directory)}
+        app, _, inputs = prepare(configuration, job["inputs"], settings)
         if job.get("trigger_name"):
             from autostacgis.triggers import FileTrigger, TimedTrigger
 
             _, options = app.resolve_call("trigger", {"plugin": job["trigger_name"]})
             controller = (TimedTrigger if job["trigger_name"] == "apscheduler" else FileTrigger)(
-                app, options, request, runner=execute_trigger
+                app, options, runner=execute_trigger
             )
             with controller:
                 controller.wait()
             return
-        result = app.run(request, inputs)
+        result = app.run(inputs=inputs)
         try:
             outputs = persist(
                 result.records,
@@ -77,7 +78,7 @@ def execute_job(identifier, settings=None):
         raise
 
 
-def execute_trigger(catalog, base_dir, request):
+def execute_trigger(configuration, base_dir):
     from uuid import uuid4
 
     from .engine import durable_item, persist
@@ -88,12 +89,15 @@ def execute_trigger(catalog, base_dir, request):
     os.environ["AUTOSTACGIS_PLUGIN_DIR"] = str(settings.data_dir / "plugins")
     from autostacgis import Application
 
-    # The native trigger supplies an already resolved, trusted catalog snapshot.
-    # Compact-name validation belongs at the remote API boundary, before this snapshot.
-    app = Application(catalog, base_dir=base_dir)
-    request = app.request(request)
-    request["work_directory"] = str(settings.data_dir / "work" / str(uuid4()))
-    result = app.run(request)
+    configuration = {
+        **configuration,
+        "execution": {
+            **configuration.get("execution", {}),
+            "work_directory": str(settings.data_dir / "work" / str(uuid4())),
+        },
+    }
+    app = Application(configuration, base_dir=base_dir)
+    result = app.run()
     try:
         identifier = uuid4()
         outputs = persist(

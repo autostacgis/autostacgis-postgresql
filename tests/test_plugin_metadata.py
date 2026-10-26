@@ -106,3 +106,15 @@ def test_explicitly_saved_results_are_served_in_place_without_copying(tmp_path):
         settings.data_dir / "results/job/files.json"
     ]
     assert output.read_bytes() == b"already saved by the result destination"
+
+
+def test_unmanifested_files_from_old_builds_are_not_served(tmp_path):
+    import pytest
+
+    from autostacgis_postgresql.engine import asset_file
+
+    directory = tmp_path / "results" / "job"
+    directory.mkdir(parents=True)
+    (directory / "result.tif").write_bytes(b"old output")
+    with pytest.raises(FileNotFoundError):
+        asset_file(SimpleNamespace(data_dir=tmp_path), "job", "result.tif")

@@ -1,6 +1,5 @@
 from contextlib import asynccontextmanager
 from hmac import compare_digest
-from typing import Literal
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
@@ -28,9 +27,7 @@ class DatabaseSettings(PostgresSettings):
 
 class Invocation(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    trigger: Literal["apscheduler", "watchdog"] | None = None
     configuration: dict
-    request: dict | None = None
     inputs: list[dict] | None = Field(default=None, max_length=1000)
 
 
@@ -128,21 +125,6 @@ def create_app(settings=None):
         except Exception as exc:
             raise HTTPException(422, str(exc)) from exc
 
-    @router.get("/configurations")
-    def configurations():
-        return store.configurations()
-
-    @router.put("/configurations/{identifier}")
-    def save_configuration(identifier: str, document: dict):
-        if len(identifier) > 200:
-            raise HTTPException(422, "Configuration name is too long")
-        try:
-            application, request, _ = engine.prepare(document, None, None, settings)
-            application.make_solver(request, [])
-        except Exception as exc:
-            raise HTTPException(422, str(exc)) from exc
-        return store.save_configuration(identifier, document)
-
     def workflow_manager():
         from autostacgis.workflow_manager import WorkflowManager
 
@@ -181,7 +163,7 @@ def create_app(settings=None):
         name = workflow_name(value.get("name"))
         document = value.get("document")
         try:
-            application, request, _ = engine.prepare(document, None, None, settings)
+            application, request, _ = engine.prepare(document, None, settings)
             application.make_solver(request, [])
         except Exception as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -201,7 +183,7 @@ def create_app(settings=None):
     def update_workflow(identifier: str, document: dict):
         workflow_name(identifier)
         try:
-            application, request, _ = engine.prepare(document, None, None, settings)
+            application, request, _ = engine.prepare(document, None, settings)
             application.make_solver(request, [])
         except Exception as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -232,7 +214,7 @@ def create_app(settings=None):
     @router.post("/validate")
     def validate_configuration(value: Invocation):
         try:
-            app, request, records = engine.prepare(value.configuration, value.request, value.inputs, settings)
+            app, request, records = engine.prepare(value.configuration, value.inputs, settings)
             app.make_solver(request, records or [])
             return {"valid": True, "solver": app.solver_name}
         except Exception as exc:
@@ -241,32 +223,32 @@ def create_app(settings=None):
     @router.post("/plan")
     def plan(value: Invocation):
         try:
-            app, request, records = engine.prepare(value.configuration, value.request, value.inputs, settings)
-            return app.plan(request, records).to_dict()
+            app, request, records = engine.prepare(value.configuration, value.inputs, settings)
+            return app.plan(inputs=records).to_dict()
         except Exception as exc:
             raise HTTPException(422, str(exc)) from exc
 
     @router.post("/jobs", status_code=202)
     def create_job(value: Invocation):
         try:
-            application, request, records = engine.prepare(
-                value.configuration, value.request, value.inputs, settings
-            )
+            application, request, records = engine.prepare(value.configuration, value.inputs, settings)
             application.make_solver(request, records or [])
             configured_trigger = application.trigger_name
             if configured_trigger and configured_trigger != "now":
                 if configured_trigger not in ("apscheduler", "watchdog"):
                     raise ValueError("This trigger runs through the local Python CLI")
-                if value.trigger and value.trigger != configured_trigger:
-                    raise ValueError("Trigger must match the workflow configuration")
-                value.trigger = configured_trigger
-            if value.trigger:
+            if configured_trigger != "now":
                 if value.inputs is not None:
                     raise ValueError("Trigger jobs discover their inputs afresh; do not provide fixed inputs")
-                application.resolve_call("trigger", {"plugin": value.trigger})
+                application.resolve_call("trigger", {"plugin": configured_trigger})
         except Exception as exc:
             raise HTTPException(422, str(exc)) from exc
-        return store.create_job(value.configuration, request, value.inputs, value.trigger)
+        return store.create_job(
+            value.configuration,
+            request,
+            value.inputs,
+            configured_trigger if configured_trigger != "now" else None,
+        )
 
     @router.get("/jobs")
     def jobs():
